@@ -1,0 +1,81 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux,   os: ubuntu-22.04 }
+          - { name: Windows, os: windows-latest }
+          - { name: macOS,   os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgl-dev libjack-jackd2-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-icccm4-dev libxcursor-dev libxkbcommon-dev libxcb-dri2-0-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev
+
+      - name: Test
+        run: cargo test --release -p nyashkkey
+
+      - name: Bundle and package
+        run: |
+          cargo xtask bundle -p nyashkkey --release
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -Command "Compress-Archive -Path target/bundled/NyashkKey.vst3 -DestinationPath NyashkKey-${{ matrix.name }}-VST3.zip"
+          else
+            (cd target/bundled && zip -r -y "../../NyashkKey-${{ matrix.name }}-VST3.zip" "NyashkKey.vst3")
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NyashkKey-${{ matrix.name }}-VST3
+          path: "*-${{ matrix.name }}-VST3.zip"
+
+  release:
+    # tags (v*) publish as before; a push to main refreshes the release of the version in Cargo.toml
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+          fi
+          echo "Release $TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip --clobber
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" dist/*.zip --target "$GITHUB_SHA" --title "$TAG" --notes-file RELEASE_NOTES.md
+          fi
