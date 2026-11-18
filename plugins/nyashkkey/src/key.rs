@@ -123,7 +123,8 @@ impl Analyzer {
     /// Feed one (mono) input sample. Returns true when a new analysis frame was added.
     #[inline]
     pub fn push(&mut self, x: f32) -> bool {
-        let mut v = x as f64;
+        // (a NaN / inf from the host would poison the filters and the histogram: silence)
+        let mut v = if x.is_finite() { x as f64 } else { 0.0 };
         for f in self.lp.iter_mut() {
             v = f.run(v);
         }

@@ -137,3 +137,15 @@ fn full_mix_with_drums_in_every_key() {
     // (G♯m read as E major: its VI chord, one note apart - the one miss of this loop)
     assert!(outside.len() <= 1, "{outside:?}");
 }
+
+#[test]
+fn recovers_after_nan_or_inf_from_the_host() {
+    for bad in [f32::NAN, f32::INFINITY] {
+        let mut x = melody(44100.0, 0, false, 12.0, 3);
+        for v in x[1000..1010].iter_mut() {
+            *v = bad;
+        }
+        let ((t, m), tc, rank) = analyse(&x, 44100.0, 0, false);
+        assert!(tc.is_finite() && rank < 3, "{bad}: {t} {m} {tc} rank {rank}");
+    }
+}
